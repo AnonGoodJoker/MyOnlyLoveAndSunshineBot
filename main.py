@@ -27,6 +27,11 @@ COMPLIMENTS_FILE = "compliments.txt"
 LOVE_TASKS_FILE = "love_tasks.txt"
 LUST_TASKS_FILE = "lust_tasks.txt"
 
+# ID пользователей
+MY_USER_ID = 812357068          # Ваш ID
+HER_USER_ID = 1419656085        # ID вашей девушки
+ALLOWED_IDS = {MY_USER_ID, HER_USER_ID}  # Множество разрешённых ID
+
 # ========== Загрузка данных из файлов ==========
 def load_lines(filename: str) -> list:
     """Загружает строки из файла, убирая пустые и лишние пробелы."""
@@ -98,56 +103,193 @@ main_menu_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-# ========== Обработчики команд ==========
+# ========== Функция проверки доступа ==========
+async def deny_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Проверяет, разрешён ли пользователь.
+    Если нет — отправляет отказ и возвращает False.
+    """
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id not in ALLOWED_IDS:
+        # Отправляем сообщение об отказе (если есть куда)
+        if update.message:
+            await update.message.reply_text("Этот бот не для тебя ;)")
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text("Этот бот не для тебя ;)")
+        return False
+    return True
+
+# ========== Функция пересылки сообщений девушки вам ==========
+async def forward_to_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет копию сообщения от девушки вам в личку с пометкой."""
+    message = update.message
+    if not message:
+        return
+
+    user = message.from_user
+    if user.id != HER_USER_ID:
+        return  # не от неё
+
+    # Формируем префикс с именем
+    name = user.first_name or "Она"
+    prefix = f"📨 От {name}:\n\n"
+
+    # Отправляем в зависимости от типа контента
+    try:
+        # Текст
+        if message.text:
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=prefix + message.text
+            )
+
+        # Фото
+        elif message.photo:
+            photo = message.photo[-1]  # самое большое
+            caption = message.caption or ""
+            await context.bot.send_photo(
+                chat_id=MY_USER_ID,
+                photo=photo.file_id,
+                caption=prefix + caption
+            )
+
+        # Видео
+        elif message.video:
+            caption = message.caption or ""
+            await context.bot.send_video(
+                chat_id=MY_USER_ID,
+                video=message.video.file_id,
+                caption=prefix + caption
+            )
+
+        # Аудио
+        elif message.audio:
+            caption = message.caption or ""
+            await context.bot.send_audio(
+                chat_id=MY_USER_ID,
+                audio=message.audio.file_id,
+                caption=prefix + caption
+            )
+
+        # Голосовые
+        elif message.voice:
+            await context.bot.send_voice(
+                chat_id=MY_USER_ID,
+                voice=message.voice.file_id,
+                caption=prefix + "Голосовое сообщение"
+            )
+
+        # Документы
+        elif message.document:
+            caption = message.caption or ""
+            await context.bot.send_document(
+                chat_id=MY_USER_ID,
+                document=message.document.file_id,
+                caption=prefix + caption
+            )
+
+        # Стикеры
+        elif message.sticker:
+            await context.bot.send_sticker(
+                chat_id=MY_USER_ID,
+                sticker=message.sticker.file_id
+            )
+            # Добавим текстовое уведомление
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=prefix + "Стикер"
+            )
+
+        # Видеосообщения (кружки)
+        elif message.video_note:
+            await context.bot.send_video_note(
+                chat_id=MY_USER_ID,
+                video_note=message.video_note.file_id
+            )
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=prefix + "Видеосообщение (кружок)"
+            )
+
+        # Остальные типы (контакты, локации и т.п.) — просто уведомление
+        else:
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=prefix + f"Отправлен {message.content_type}"
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при пересылке: {e}")
+
+# ========== Обработчик команд ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет приветствие и главное меню."""
+    """Отправляет приветствие и главное меню (только для разрешённых)."""
+    if not await deny_access(update, context):
+        return
     await update.message.reply_text(
         "Привет, моё солнышко :)️\n"
         "Не забывай выполнять оба типа заданий, хорошо?\n\nВыбери, что ты хочешь сейчас:",
         reply_markup=main_menu_keyboard,
     )
 
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает нажатия на кнопки главного меню."""
-    text = update.message.text
-    chat_id = str(update.effective_chat.id)
+# ========== Универсальный обработчик сообщений ==========
+async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает все входящие сообщения: сначала пересылает (если от девушки), затем обрабатывает кнопки меню (только для разрешённых)."""
+    # Сначала пересылаем сообщение девушки вам (даже если она не в allowed_ids? она там есть)
+    await forward_to_me(update, context)
 
-    if text == "Статистика":
-        stats = load_stats()
-        user_stats = stats.get(chat_id, {"love": 0, "lust": 0})
-        await update.message.reply_text(
-            f"📊 Твоя статистика:\n"
-            f"Любовь: {user_stats['love']}\n"
-            f"Похоть: {user_stats['lust']}",
-            reply_markup=main_menu_keyboard,
-        )
+    # Проверяем доступ для дальнейшей обработки (если пользователь не разрешён, отвечаем отказом)
+    if not await deny_access(update, context):
+        return
 
-    elif text == "Хочу комплимент":
-        compliment = random.choice(compliments)
-        await update.message.reply_text(compliment, reply_markup=main_menu_keyboard)
+    # Далее обрабатываем нажатия кнопок меню (только для неё и только текст)
+    if update.message and update.message.text:
+        text = update.message.text
+        chat_id = str(update.effective_chat.id)
 
-    elif text == "Хочу побыть любимой":
-        task_text, price = random.choice(love_tasks)
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Сделала это", callback_data=f"love_done_{price}"),
-                InlineKeyboardButton("❌ Не хочу", callback_data="love_cancel"),
-            ]
-        ])
-        await update.message.reply_text(task_text, reply_markup=keyboard)
+        if text == "Статистика":
+            stats = load_stats()
+            user_stats = stats.get(chat_id, {"love": 0, "lust": 0})
+            await update.message.reply_text(
+                f"📊 Твоя статистика:\n"
+                f"Любовь: {user_stats['love']}\n"
+                f"Похоть: {user_stats['lust']}",
+                reply_markup=main_menu_keyboard,
+            )
 
-    elif text == "Хочу побыть шлюхой":
-        task_text, price = random.choice(lust_tasks)
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Сделала это", callback_data=f"lust_done_{price}"),
-                InlineKeyboardButton("❌ Не хочу", callback_data="lust_cancel"),
-            ]
-        ])
-        await update.message.reply_text(task_text, reply_markup=keyboard)
+        elif text == "Хочу комплимент":
+            compliment = random.choice(compliments)
+            await update.message.reply_text(compliment, reply_markup=main_menu_keyboard)
 
+        elif text == "Хочу побыть любимой":
+            task_text, price = random.choice(love_tasks)
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Сделала это", callback_data=f"love_done_{price}"),
+                    InlineKeyboardButton("❌ Не хочу", callback_data="love_cancel"),
+                ]
+            ])
+            await update.message.reply_text(task_text, reply_markup=keyboard)
+
+        elif text == "Хочу побыть шлюхой":
+            task_text, price = random.choice(lust_tasks)
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Сделала это", callback_data=f"lust_done_{price}"),
+                    InlineKeyboardButton("❌ Не хочу", callback_data="lust_cancel"),
+                ]
+            ])
+            await update.message.reply_text(task_text, reply_markup=keyboard)
+
+# ========== Обработчик инлайн-кнопок ==========
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает нажатия на инлайн-кнопки."""
+    """Обрабатывает нажатия на инлайн-кнопки (только для разрешённых)."""
+    if not await deny_access(update, context):
+        # Важно: для callback нужно обязательно ответить, чтобы убрать "часики"
+        if update.callback_query:
+            await update.callback_query.answer()
+        return
+
     query = update.callback_query
     await query.answer()
 
@@ -213,8 +355,11 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
+    # Порядок важен: сначала команда /start
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
+    # Потом обработчик всех сообщений (включая текст, фото, видео и т.д.)
+    app.add_handler(MessageHandler(filters.ALL, handle_all_messages))
+    # Обработчик инлайн-кнопок
     app.add_handler(CallbackQueryHandler(button_callback))
 
     logger.info("Бот запущен...")
