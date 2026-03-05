@@ -32,6 +32,9 @@ MY_USER_ID = 812357068          # Ваш ID
 HER_USER_ID = 1419656085        # ID вашей девушки
 ALLOWED_IDS = {MY_USER_ID, HER_USER_ID}  # Множество разрешённых ID
 
+# Список команд меню (чтобы не пересылать их как обычные сообщения)
+MENU_COMMANDS = {"Статистика", "Хочу комплимент", "Хочу побыть любимой", "Хочу побыть шлюхой"}
+
 # ========== Загрузка данных из файлов ==========
 def load_lines(filename: str) -> list:
     """Загружает строки из файла, убирая пустые и лишние пробелы."""
@@ -120,9 +123,9 @@ async def deny_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     return True
 
-# ========== Функция пересылки сообщений девушки вам ==========
+# ========== Функция пересылки сообщений девушки вам (только не-команды) ==========
 async def forward_to_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет копию сообщения от девушки вам в личку с пометкой."""
+    """Отправляет копию НЕ-командного сообщения от девушки вам в личку с пометкой."""
     message = update.message
     if not message:
         return
@@ -130,6 +133,10 @@ async def forward_to_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = message.from_user
     if user.id != HER_USER_ID:
         return  # не от неё
+
+    # Если это текст и он является командой меню — не пересылаем
+    if message.text and message.text in MENU_COMMANDS:
+        return
 
     # Формируем префикс с именем
     name = user.first_name or "Она"
@@ -235,31 +242,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ========== Универсальный обработчик сообщений ==========
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает все входящие сообщения: сначала пересылает (если от девушки), затем обрабатывает кнопки меню (только для разрешённых)."""
-    # Сначала пересылаем сообщение девушки вам (даже если она не в allowed_ids? она там есть)
+    # Сначала пересылаем не-командные сообщения девушки вам
     await forward_to_me(update, context)
 
     # Проверяем доступ для дальнейшей обработки (если пользователь не разрешён, отвечаем отказом)
     if not await deny_access(update, context):
         return
 
-    # Далее обрабатываем нажатия кнопок меню (только для неё и только текст)
+    # Далее обрабатываем нажатия кнопок меню (только текст)
     if update.message and update.message.text:
         text = update.message.text
+        user_id = update.effective_user.id
         chat_id = str(update.effective_chat.id)
 
         if text == "Статистика":
             stats = load_stats()
             user_stats = stats.get(chat_id, {"love": 0, "lust": 0})
             await update.message.reply_text(
-                f"📊 Твоя статистика:\n"
-                f"Любовь: {user_stats['love']}\n"
-                f"Похоть: {user_stats['lust']}",
+                f"📊 Твоя статистика\n"
+                f"Любовь — {user_stats['love']}\n"
+                f"Похоть — {user_stats['lust']}",
                 reply_markup=main_menu_keyboard,
             )
+            # Если это сделала девушка — уведомить меня
+            if user_id == HER_USER_ID:
+                await context.bot.send_message(
+                    chat_id=MY_USER_ID,
+                    text=f"📊 Она запросила статистику:\nЛюбовь: {user_stats['love']}\nПохоть: {user_stats['lust']}"
+                )
 
         elif text == "Хочу комплимент":
             compliment = random.choice(compliments)
             await update.message.reply_text(compliment, reply_markup=main_menu_keyboard)
+            # Если это сделала девушка — уведомить меня
+            if user_id == HER_USER_ID:
+                await context.bot.send_message(
+                    chat_id=MY_USER_ID,
+                    text=f"💬 Она получила комплимент:\n\n{compliment}"
+                )
 
         elif text == "Хочу побыть любимой":
             task_text, price = random.choice(love_tasks)
@@ -294,6 +314,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
 
     data = query.data
+    user_id = update.effective_user.id
     chat_id = str(update.effective_chat.id)
     message = query.message
     task_text = message.text  # текст задания
@@ -316,12 +337,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Удаляем сообщение с заданием
         await message.delete()
 
-        # Отправляем подтверждение
+        # Отправляем подтверждение девушке
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"🎉 Молодец! Ты получила {price} к любви, сделав это:\n\n{task_text}",
             reply_markup=main_menu_keyboard,
         )
+
+        # Если это сделала девушка — уведомить меня
+        if user_id == HER_USER_ID:
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=f"✅ Она выполнила задание «{task_text}» и получила +{price} к любви."
+            )
 
     elif data.startswith("lust_done_"):
         try:
@@ -343,9 +371,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=main_menu_keyboard,
         )
 
+        if user_id == HER_USER_ID:
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=f"🔥 Она выполнила задание «{task_text}» и получила +{price} к похоти."
+            )
+
     elif data in ("love_cancel", "lust_cancel"):
         # Просто удаляем сообщение
         await message.delete()
+
+        # Уведомить меня, если это сделала девушка
+        if user_id == HER_USER_ID:
+            # Определяем тип задания из callback_data
+            task_type = "любви" if data == "love_cancel" else "похоти"
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=f"❌ Она отказалась делать задание «{task_text}» (тип: {task_type})."
+            )
 
 # ========== Запуск бота ==========
 def main() -> None:
