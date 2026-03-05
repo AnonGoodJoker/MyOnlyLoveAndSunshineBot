@@ -16,7 +16,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# Глобальный список времён вызовов
+# Глобальный список времён вызовов (не используется, но оставлен для совместимости)
 CHALLENGE_TIMES = []
 
 # Настройка логирования
@@ -256,7 +256,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=main_menu_keyboard,
     )
 
-# Новая команда: следующий вызов
+# Команда: следующий вызов
 async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает, через сколько времени будет следующий вызов (по времени Екатеринбурга)."""
     if not await deny_access(update, context):
@@ -307,7 +307,17 @@ async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.exception("Ошибка в /next_challenge")
         await update.message.reply_text("Произошла внутренняя ошибка. Подробности в логах.")
-        
+
+# Команда: принудительный вызов (только для автора)
+async def force_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Принудительно отправить вызов (только для создателя)."""
+    if update.effective_user.id != MY_USER_ID:
+        await update.message.reply_text("Эта команда только для создателя.")
+        return
+    # Вызываем функцию отправки вызова
+    await send_challenge(context)
+    await update.message.reply_text("✅ Вызов принудительно отправлен!")
+
 # ========== Универсальный обработчик сообщений ==========
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает все входящие сообщения: сначала пересылает (если от девушки), затем обрабатывает кнопки меню (только для разрешённых)."""
@@ -385,7 +395,7 @@ async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         except Exception as e:
             logger.warning(f"Не удалось удалить предыдущее сообщение вызова: {e}")
-        # Очищаем старые данные (остальное позже перезатрём)
+        # Очищаем старые данные
         for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text', 'challenge_price', 'challenge_type']:
             bot_data.pop(key, None)
 
@@ -409,12 +419,10 @@ async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=keyboard
     )
 
-    # Сохраняем информацию о вызове
+    # Сохраняем информацию о вызове (цена и тип не сохраняются – будут взяты из callback_data)
     bot_data['challenge_message_id'] = message.message_id
     bot_data['challenge_chat_id'] = chat_id
     bot_data['challenge_task_text'] = task_text
-    bot_data['challenge_price'] = price
-    bot_data['challenge_type'] = task_type
 
     # Уведомляем вас
     await context.bot.send_message(
@@ -513,51 +521,58 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Этот вызов уже недействителен.", show_alert=True)
             return
 
-        # Получаем данные вызова из bot_data
+        # Получаем данные из callback_data
+        parts = data.split('_')
+        if len(parts) >= 4 and parts[0] == 'challenge' and parts[2] == 'done':
+            # Формат: challenge_love_done_2
+            challenge_type = parts[1]  # 'love' или 'lust'
+            try:
+                price = int(parts[3])
+            except ValueError:
+                price = 1
+        else:
+            # Это challenge_skip
+            challenge_type = None
+            price = 0
+
+        # Получаем текст задания из bot_data
         challenge_task_text = context.bot_data.get('challenge_task_text', 'Неизвестное задание')
-        challenge_price = context.bot_data.get('challenge_price', 1)
-        challenge_type = context.bot_data.get('challenge_type', 'love')
 
-        if data.startswith("challenge_love_done_") or data.startswith("challenge_lust_done_"):
-            # Выполнение вызова
-            doubled_price = challenge_price * 2
-
-            stats = load_stats()
-            if chat_id not in stats:
-                stats[chat_id] = {"love": 0, "lust": 0}
-            stats[chat_id][challenge_type] += doubled_price
-            save_stats(stats)
-
-            # Удаляем сообщение
+        if data == "challenge_skip":
             await message.delete()
-
-            # Очищаем данные о вызове
-            for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text', 'challenge_price', 'challenge_type']:
+            for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text']:
                 context.bot_data.pop(key, None)
-
-            # Подтверждение девушке
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x2: +{doubled_price} к {challenge_type}!",
-                reply_markup=main_menu_keyboard
-            )
-
-            # Уведомление вам
-            await context.bot.send_message(
-                chat_id=MY_USER_ID,
-                text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к {challenge_type} (x2 от {challenge_price})."
-            )
-
-        elif data == "challenge_skip":
-            # Пропуск вызова
-            await message.delete()
-            for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text', 'challenge_price', 'challenge_type']:
-                context.bot_data.pop(key, None)
-
             await context.bot.send_message(
                 chat_id=MY_USER_ID,
                 text=f"❌ Она пропустила вызов: «{challenge_task_text}»."
             )
+            return
+
+        # Выполнение вызова
+        doubled_price = price * 2
+
+        stats = load_stats()
+        if chat_id not in stats:
+            stats[chat_id] = {"love": 0, "lust": 0}
+        stats[chat_id][challenge_type] += doubled_price
+        save_stats(stats)
+
+        await message.delete()
+        for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text']:
+            context.bot_data.pop(key, None)
+
+        # Подтверждение девушке
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x2: +{doubled_price} к {challenge_type}!",
+            reply_markup=main_menu_keyboard
+        )
+
+        # Уведомление вам
+        await context.bot.send_message(
+            chat_id=MY_USER_ID,
+            text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к {challenge_type} (x2 от {price})."
+        )
 
 # ========== Запуск бота ==========
 def main() -> None:
@@ -593,11 +608,12 @@ def main() -> None:
     # Обработчики команд
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("next_challenge", next_challenge))
+    app.add_handler(CommandHandler("force_challenge", force_challenge))
     app.add_handler(MessageHandler(filters.ALL, handle_all_messages))
     app.add_handler(CallbackQueryHandler(button_callback))
 
     logger.info("Бот запущен...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-    
+
 if __name__ == "__main__":
     main()
