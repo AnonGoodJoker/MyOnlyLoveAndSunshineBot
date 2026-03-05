@@ -259,38 +259,42 @@ async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not await deny_access(update, context):
         return
 
-    # Получаем текущее время в Екатеринбурге
-    now = datetime.now(TIMEZONE)
-    today = now.date()
+    logger.info("Команда /next_challenge вызвана")
 
-    # Список времён вызовов (глобальная переменная, задаётся в main)
-    challenge_times_local = context.bot_data.get('challenge_times', [])
-
-    if not challenge_times_local:
-        await update.message.reply_text("Планировщик вызовов не настроен.")
+    global CHALLENGE_TIMES
+    if not CHALLENGE_TIMES:
+        await update.message.reply_text("❌ Список времён вызовов не инициализирован. Проверьте логи бота.")
         return
 
-    # Найдём ближайшее время вызова
-    next_time = None
-    for t in challenge_times_local:
-        # Составляем datetime на сегодня с этим временем
-        candidate = TIMEZONE.localize(datetime.combine(today, t))
-        if candidate > now:
-            next_time = candidate
-            break
+    try:
+        # Текущее время в Екатеринбурге
+        now = datetime.now(TIMEZONE)
+        today = now.date()
 
-    # Если не нашли сегодня, берём первое время завтра
-    if not next_time:
-        tomorrow = today + timedelta(days=1)
-        next_time = TIMEZONE.localize(datetime.combine(tomorrow, challenge_times_local[0]))
+        # Ищем ближайшее время вызова
+        next_time = None
+        for t in CHALLENGE_TIMES:
+            # t уже содержит часовой пояс, combine создаст aware datetime
+            candidate = datetime.combine(today, t)
+            if candidate > now:
+                next_time = candidate
+                break
 
-    delta = next_time - now
-    hours, remainder = divmod(delta.seconds, 3600)
-    minutes = remainder // 60
+        # Если сегодня уже нет, берём первое время завтра
+        if not next_time:
+            tomorrow = today + timedelta(days=1)
+            next_time = datetime.combine(tomorrow, CHALLENGE_TIMES[0])
 
-    await update.message.reply_text(
-        f"⏳ Следующий вызов через {hours} ч {minutes} мин (в {next_time.strftime('%H:%M')} по Екб)."
-    )
+        delta = next_time - now
+        hours, remainder = divmod(delta.seconds, 3600)
+        minutes = remainder // 60
+
+        await update.message.reply_text(
+            f"⏳ Следующий вызов через {hours} ч {minutes} мин (в {next_time.strftime('%H:%M')} по Екатеринбургу)."
+        )
+    except Exception as e:
+        logger.exception("Ошибка в /next_challenge")
+        await update.message.reply_text("Произошла внутренняя ошибка. Подробности в логах.")
 
 # ========== Универсальный обработчик сообщений ==========
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
