@@ -16,6 +16,9 @@ from telegram.ext import (
     ContextTypes,
 )
 
+# Глобальный список времён вызовов
+CHALLENGE_TIMES = []
+
 # Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -561,7 +564,8 @@ def main() -> None:
         # Создаем объект time с часовым поясом Екатеринбурга
         t = time(hour=hour, minute=0, second=0, tzinfo=TIMEZONE)
         challenge_times_local.append(t)
-
+        
+    CHALLENGE_TIMES = challenge_times_local 
     # Сохраняем в bot_data для использования в команде next_challenge
     app.bot_data['challenge_times'] = challenge_times_local
 
