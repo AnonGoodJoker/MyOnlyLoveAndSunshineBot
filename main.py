@@ -39,7 +39,7 @@ HER_USER_ID = 1419656085        # ID вашей девушки
 ALLOWED_IDS = {MY_USER_ID, HER_USER_ID}  # Множество разрешённых ID
 
 # Список команд меню (чтобы не пересылать их как обычные сообщения)
-MENU_COMMANDS = {"Статистика", "Хочу комплимент", "Хочу побыть любимой", "Хочу побыть шлюхой"}
+MENU_COMMANDS = {"📊 Статистика", "🥺 Хочу комплимент", "❤️ Хочу побыть любимой", "❤️‍🔥 Хочу побыть шлюхой"}
 
 # ========== Загрузка данных из файлов ==========
 def load_lines(filename: str) -> list:
@@ -104,10 +104,10 @@ if not lust_tasks:
 # ========== Клавиатура главного меню ==========
 main_menu_keyboard = ReplyKeyboardMarkup(
     [
-        ["Статистика"],
-        ["Хочу комплимент"],
-        ["Хочу побыть любимой"],
-        ["Хочу побыть шлюхой"],
+        ["📊 Статистика"],
+        ["🥺 Хочу комплимент"],
+        ["❤️ Хочу побыть любимой"],
+        ["❤️‍🔥 Хочу побыть шлюхой"],
     ],
     resize_keyboard=True,
 )
@@ -261,7 +261,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         user_id = update.effective_user.id
         chat_id = str(update.effective_chat.id)
 
-        if text == "Статистика":
+        if text == "📊 Статистика":
             stats = load_stats()
             user_stats = stats.get(chat_id, {"love": 0, "lust": 0})
             await update.message.reply_text(
@@ -277,7 +277,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     text=f"📊 Она запросила статистику:\nЛюбовь: {user_stats['love']}\nПохоть: {user_stats['lust']}"
                 )
 
-        elif text == "Хочу комплимент":
+        elif text == "🥺 Хочу комплимент":
             compliment = random.choice(compliments)
             await update.message.reply_text(compliment, reply_markup=main_menu_keyboard)
             # Если это сделала девушка — уведомить меня
@@ -287,7 +287,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                     text=f"💬 Она получила комплимент:\n\n{compliment}"
                 )
 
-        elif text == "Хочу побыть любимой":
+        elif text == "❤️ Хочу побыть любимой":
             task_text, price = random.choice(love_tasks)
             keyboard = InlineKeyboardMarkup([
                 [
@@ -297,7 +297,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             ])
             await update.message.reply_text(task_text, reply_markup=keyboard)
 
-        elif text == "Хочу побыть шлюхой":
+        elif text == "❤️‍🔥 Хочу побыть шлюхой":
             task_text, price = random.choice(lust_tasks)
             keyboard = InlineKeyboardMarkup([
                 [
