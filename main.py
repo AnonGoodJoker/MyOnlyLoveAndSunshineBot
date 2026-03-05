@@ -2,6 +2,7 @@ import json
 import random
 import logging
 import os
+from datetime import time
 from typing import Dict, List, Tuple
 
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
@@ -37,6 +38,9 @@ LUST_TASKS_FILE = "lust_tasks.txt"
 MY_USER_ID = 812357068          # Ваш ID
 HER_USER_ID = 1419656085        # ID вашей девушки
 ALLOWED_IDS = {MY_USER_ID, HER_USER_ID}  # Множество разрешённых ID
+
+# Интервал вызовов (в часах)
+CHALLENGE_INTERVAL_HOURS = 3  # Можете изменить на любое целое число
 
 # Список команд меню (чтобы не пересылать их как обычные сообщения)
 MENU_COMMANDS = {"📊 Статистика", "🥺 Хочу комплимент", "❤️ Хочу побыть любимой", "❤️‍🔥 Хочу побыть шлюхой"}
@@ -307,6 +311,58 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             ])
             await update.message.reply_text(task_text, reply_markup=keyboard)
 
+# ========== Функция отправки вызова по расписанию ==========
+async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет вызов (удвоенное задание) в запланированное время."""
+    chat_id = HER_USER_ID
+    bot_data = context.bot_data
+
+    # Удаляем предыдущий активный вызов, если есть
+    if 'challenge_message_id' in bot_data and 'challenge_chat_id' in bot_data:
+        try:
+            await context.bot.delete_message(
+                chat_id=bot_data['challenge_chat_id'],
+                message_id=bot_data['challenge_message_id']
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось удалить предыдущее сообщение вызова: {e}")
+        # Очищаем старые данные (остальное позже перезатрём)
+        for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text', 'challenge_price', 'challenge_type']:
+            bot_data.pop(key, None)
+
+    # Выбираем случайный тип задания и само задание
+    task_type = random.choice(['love', 'lust'])
+    if task_type == 'love':
+        task_text, price = random.choice(love_tasks)
+    else:
+        task_text, price = random.choice(lust_tasks)
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Выполнила", callback_data=f"challenge_{task_type}_done_{price}"),
+            InlineKeyboardButton("❌ Пропустить", callback_data="challenge_skip")
+        ]
+    ])
+
+    message = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"⚡️ ВЫЗОВ ⚡️\n\n{task_text}\n\nЭто вызов, поэтому награда x2!",
+        reply_markup=keyboard
+    )
+
+    # Сохраняем информацию о вызове
+    bot_data['challenge_message_id'] = message.message_id
+    bot_data['challenge_chat_id'] = chat_id
+    bot_data['challenge_task_text'] = task_text
+    bot_data['challenge_price'] = price
+    bot_data['challenge_type'] = task_type
+
+    # Уведомляем вас
+    await context.bot.send_message(
+        chat_id=MY_USER_ID,
+        text=f"⚡️ Новый вызов для неё:\n\n{task_text} (тип: {task_type}, базовые очки: {price})"
+    )
+
 # ========== Обработчик инлайн-кнопок ==========
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает нажатия на инлайн-кнопки (только для разрешённых)."""
@@ -323,45 +379,40 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
     chat_id = str(update.effective_chat.id)
     message = query.message
-    task_text = message.text  # текст задания
+    task_text = message.text  # текст задания (для обычных кнопок)
 
+    # --- Обычные задания (любовь/похоть) ---
     if data.startswith("love_done_"):
-        # Извлекаем цену
         try:
             price = int(data.split("_")[2])
         except (IndexError, ValueError):
             logger.error(f"Не удалось извлечь цену из callback_data: {data}")
-            price = 1  # на всякий случай
+            price = 1
 
-        # Обновляем статистику
         stats = load_stats()
         if chat_id not in stats:
             stats[chat_id] = {"love": 0, "lust": 0}
         stats[chat_id]["love"] += price
         save_stats(stats)
 
-        # Удаляем сообщение с заданием
         await message.delete()
-
-        # Отправляем подтверждение девушке
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"🎉 Молодец! Ты получила {price} к любви, сделав это:\n\n{task_text}",
             reply_markup=main_menu_keyboard,
         )
 
-        # Если это сделала девушка — уведомить меня
         if user_id == HER_USER_ID:
             await context.bot.send_message(
                 chat_id=MY_USER_ID,
                 text=f"✅ Она выполнила задание «{task_text}» и получила +{price} к любви."
             )
+        return
 
     elif data.startswith("lust_done_"):
         try:
             price = int(data.split("_")[2])
         except (IndexError, ValueError):
-            logger.error(f"Не удалось извлечь цену из callback_data: {data}")
             price = 1
 
         stats = load_stats()
@@ -382,18 +433,71 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chat_id=MY_USER_ID,
                 text=f"🔥 Она выполнила задание «{task_text}» и получила +{price} к похоти."
             )
+        return
 
     elif data in ("love_cancel", "lust_cancel"):
-        # Просто удаляем сообщение
         await message.delete()
-
-        # Уведомить меня, если это сделала девушка
         if user_id == HER_USER_ID:
-            # Определяем тип задания из callback_data
             task_type = "любви" if data == "love_cancel" else "похоти"
             await context.bot.send_message(
                 chat_id=MY_USER_ID,
                 text=f"❌ Она отказалась делать задание «{task_text}» (тип: {task_type})."
+            )
+        return
+
+    # --- Вызовы ---
+    if data.startswith("challenge_"):
+        # Проверяем, есть ли активный вызов в bot_data
+        if 'challenge_message_id' not in context.bot_data or context.bot_data['challenge_message_id'] != message.message_id:
+            # Сообщение устарело или бот перезапущен
+            await message.delete()
+            await query.answer("Этот вызов уже недействителен.", show_alert=True)
+            return
+
+        # Получаем данные вызова из bot_data
+        challenge_task_text = context.bot_data.get('challenge_task_text', 'Неизвестное задание')
+        challenge_price = context.bot_data.get('challenge_price', 1)
+        challenge_type = context.bot_data.get('challenge_type', 'love')
+
+        if data.startswith("challenge_love_done_") or data.startswith("challenge_lust_done_"):
+            # Выполнение вызова
+            doubled_price = challenge_price * 2
+
+            stats = load_stats()
+            if chat_id not in stats:
+                stats[chat_id] = {"love": 0, "lust": 0}
+            stats[chat_id][challenge_type] += doubled_price
+            save_stats(stats)
+
+            # Удаляем сообщение
+            await message.delete()
+
+            # Очищаем данные о вызове
+            for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text', 'challenge_price', 'challenge_type']:
+                context.bot_data.pop(key, None)
+
+            # Подтверждение девушке
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x2: +{doubled_price} к {challenge_type}!",
+                reply_markup=main_menu_keyboard
+            )
+
+            # Уведомление вам
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к {challenge_type} (x2 от {challenge_price})."
+            )
+
+        elif data == "challenge_skip":
+            # Пропуск вызова
+            await message.delete()
+            for key in ['challenge_message_id', 'challenge_chat_id', 'challenge_task_text', 'challenge_price', 'challenge_type']:
+                context.bot_data.pop(key, None)
+
+            await context.bot.send_message(
+                chat_id=MY_USER_ID,
+                text=f"❌ Она пропустила вызов: «{challenge_task_text}»."
             )
 
 # ========== Запуск бота ==========
@@ -404,11 +508,23 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # Порядок важен: сначала команда /start
+    # Настройка планировщика заданий: отправка вызовов каждые CHALLENGE_INTERVAL_HOURS, начиная с 00:00 UTC
+    job_queue = app.job_queue
+    if job_queue:
+        # Генерируем времена от 0 до 23 с шагом CHALLENGE_INTERVAL_HOURS
+        challenge_times = []
+        for hour in range(0, 24, CHALLENGE_INTERVAL_HOURS):
+            challenge_times.append(time(hour=hour, minute=0, second=0))
+        
+        for t in challenge_times:
+            job_queue.run_daily(send_challenge, time=t, days=(0,1,2,3,4,5,6), name=f"challenge_{t}")
+        logger.info(f"Планировщик вызовов запущен: каждый день в {[t.strftime('%H:%M') for t in challenge_times]} UTC")
+    else:
+        logger.warning("Job queue не доступна, вызовы не будут отправляться автоматически.")
+
+    # Обработчики
     app.add_handler(CommandHandler("start", start))
-    # Потом обработчик всех сообщений (включая текст, фото, видео и т.д.)
     app.add_handler(MessageHandler(filters.ALL, handle_all_messages))
-    # Обработчик инлайн-кнопок
     app.add_handler(CallbackQueryHandler(button_callback))
 
     logger.info("Бот запущен...")
