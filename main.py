@@ -2,9 +2,10 @@ import json
 import random
 import logging
 import os
-from datetime import time
+from datetime import time, datetime, timedelta
 from typing import Dict, List, Tuple
 
+import pytz
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -40,7 +41,10 @@ HER_USER_ID = 1419656085        # ID вашей девушки
 ALLOWED_IDS = {MY_USER_ID, HER_USER_ID}  # Множество разрешённых ID
 
 # Интервал вызовов (в часах)
-CHALLENGE_INTERVAL_HOURS = 3  # Можете изменить на любое целое число
+CHALLENGE_INTERVAL_HOURS = 2  # Можете изменить на любое целое число
+
+# Часовой пояс Екатеринбурга (UTC+5)
+TIMEZONE = pytz.timezone('Asia/Yekaterinburg')
 
 # Список команд меню (чтобы не пересылать их как обычные сообщения)
 MENU_COMMANDS = {"📊 Статистика", "🥺 Хочу комплимент", "❤️ Хочу побыть любимой", "❤️‍🔥 Хочу побыть шлюхой"}
@@ -247,6 +251,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Привет, моё солнышко :)️\n"
         "Не забывай выполнять оба типа заданий, хорошо?\n\nВыбери, что ты хочешь сейчас:",
         reply_markup=main_menu_keyboard,
+    )
+
+# Новая команда: следующий вызов
+async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает, через сколько времени будет следующий вызов (по времени Екатеринбурга)."""
+    if not await deny_access(update, context):
+        return
+
+    # Получаем текущее время в Екатеринбурге
+    now = datetime.now(TIMEZONE)
+    today = now.date()
+
+    # Список времён вызовов (глобальная переменная, задаётся в main)
+    challenge_times_local = context.bot_data.get('challenge_times', [])
+
+    if not challenge_times_local:
+        await update.message.reply_text("Планировщик вызовов не настроен.")
+        return
+
+    # Найдём ближайшее время вызова
+    next_time = None
+    for t in challenge_times_local:
+        # Составляем datetime на сегодня с этим временем
+        candidate = TIMEZONE.localize(datetime.combine(today, t))
+        if candidate > now:
+            next_time = candidate
+            break
+
+    # Если не нашли сегодня, берём первое время завтра
+    if not next_time:
+        tomorrow = today + timedelta(days=1)
+        next_time = TIMEZONE.localize(datetime.combine(tomorrow, challenge_times_local[0]))
+
+    delta = next_time - now
+    hours, remainder = divmod(delta.seconds, 3600)
+    minutes = remainder // 60
+
+    await update.message.reply_text(
+        f"⏳ Следующий вызов через {hours} ч {minutes} мин (в {next_time.strftime('%H:%M')} по Екб)."
     )
 
 # ========== Универсальный обработчик сообщений ==========
@@ -508,22 +551,28 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # Настройка планировщика заданий: отправка вызовов каждые CHALLENGE_INTERVAL_HOURS, начиная с 00:00 UTC
+    # Генерируем список времен вызовов по местному времени (Екатеринбург)
+    challenge_times_local = []
+    for hour in range(0, 24, CHALLENGE_INTERVAL_HOURS):
+        # Создаем объект time с часовым поясом Екатеринбурга
+        t = time(hour=hour, minute=0, second=0, tzinfo=TIMEZONE)
+        challenge_times_local.append(t)
+
+    # Сохраняем в bot_data для использования в команде next_challenge
+    app.bot_data['challenge_times'] = challenge_times_local
+
+    # Настройка планировщика заданий
     job_queue = app.job_queue
     if job_queue:
-        # Генерируем времена от 0 до 23 с шагом CHALLENGE_INTERVAL_HOURS
-        challenge_times = []
-        for hour in range(0, 24, CHALLENGE_INTERVAL_HOURS):
-            challenge_times.append(time(hour=hour, minute=0, second=0))
-        
-        for t in challenge_times:
-            job_queue.run_daily(send_challenge, time=t, days=(0,1,2,3,4,5,6), name=f"challenge_{t}")
-        logger.info(f"Планировщик вызовов запущен: каждый день в {[t.strftime('%H:%M') for t in challenge_times]} UTC")
+        for t in challenge_times_local:
+            job_queue.run_daily(send_challenge, time=t, days=(0,1,2,3,4,5,6), name=f"challenge_{t.hour:02d}")
+        logger.info(f"Планировщик вызовов запущен: каждый день в {[t.strftime('%H:%M') for t in challenge_times_local]} по Екатеринбургу")
     else:
         logger.warning("Job queue не доступна, вызовы не будут отправляться автоматически.")
 
-    # Обработчики
+    # Обработчики команд
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("next_challenge", next_challenge))
     app.add_handler(MessageHandler(filters.ALL, handle_all_messages))
     app.add_handler(CallbackQueryHandler(button_callback))
 
