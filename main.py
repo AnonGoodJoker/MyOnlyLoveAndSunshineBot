@@ -264,20 +264,19 @@ async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info("Команда /next_challenge вызвана")
 
-    global CHALLENGE_TIMES
-    if not CHALLENGE_TIMES:
+    # Получаем список времён из bot_data (сохраняется в main())
+    challenge_times = context.bot_data.get('challenge_times', [])
+    if not challenge_times:
         await update.message.reply_text("❌ Список времён вызовов не инициализирован. Проверьте логи бота.")
         return
 
     try:
-        # Текущее время в Екатеринбурге
         now = datetime.now(TIMEZONE)
         today = now.date()
 
         # Ищем ближайшее время вызова
         next_time = None
-        for t in CHALLENGE_TIMES:
-            # t уже содержит часовой пояс, combine создаст aware datetime
+        for t in challenge_times:
             candidate = datetime.combine(today, t)
             if candidate > now:
                 next_time = candidate
@@ -286,7 +285,7 @@ async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Если сегодня уже нет, берём первое время завтра
         if not next_time:
             tomorrow = today + timedelta(days=1)
-            next_time = datetime.combine(tomorrow, CHALLENGE_TIMES[0])
+            next_time = datetime.combine(tomorrow, challenge_times[0])
 
         delta = next_time - now
         hours, remainder = divmod(delta.seconds, 3600)
@@ -298,7 +297,7 @@ async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.exception("Ошибка в /next_challenge")
         await update.message.reply_text("Произошла внутренняя ошибка. Подробности в логах.")
-
+        
 # ========== Универсальный обработчик сообщений ==========
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает все входящие сообщения: сначала пересылает (если от девушки), затем обрабатывает кнопки меню (только для разрешённых)."""
