@@ -551,6 +551,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Выполнение вызова
         doubled_price = price * 2
 
+        # Русское название типа
+        type_name = {'love': 'любви', 'lust': 'похоти'}.get(challenge_type, challenge_type)
+
         stats = load_stats()
         if chat_id not in stats:
             stats[chat_id] = {"love": 0, "lust": 0}
@@ -564,14 +567,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Подтверждение девушке
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x2: +{doubled_price} к {challenge_type}!",
+            text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x2: +{doubled_price} к очкам {type_name}!",
             reply_markup=main_menu_keyboard
         )
 
         # Уведомление вам
         await context.bot.send_message(
             chat_id=MY_USER_ID,
-            text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к {challenge_type} (x2 от {price})."
+            text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к очкам {type_name} (x2 от {price})."
         )
 
 # ========== Запуск бота ==========
