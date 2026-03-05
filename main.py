@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 # ========== Конфигурация ==========
 TOKEN = os.getenv("BOT_TOKEN")
-STATS_FILE = "stats.json"
+
+# Папка для хранения данных, которая не будет перезаписываться при деплое
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 COMPLIMENTS_FILE = "compliments.txt"
 LOVE_TASKS_FILE = "love_tasks.txt"
 LUST_TASKS_FILE = "lust_tasks.txt"
