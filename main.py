@@ -264,28 +264,38 @@ async def next_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info("Команда /next_challenge вызвана")
 
-    # Получаем список времён из bot_data (сохраняется в main())
-    challenge_times = context.bot_data.get('challenge_times', [])
-    if not challenge_times:
-        await update.message.reply_text("❌ Список времён вызовов не инициализирован. Проверьте логи бота.")
+    # Получаем список часов вызовов из bot_data
+    challenge_hours = context.bot_data.get('challenge_hours', [])
+    if not challenge_hours:
+        await update.message.reply_text("❌ Список часов вызовов не инициализирован. Проверьте логи бота.")
         return
 
     try:
         now = datetime.now(TIMEZONE)
-        today = now.date()
+        current_hour = now.hour
+        current_minute = now.minute
 
-        # Ищем ближайшее время вызова
-        next_time = None
-        for t in challenge_times:
-            candidate = datetime.combine(today, t)
-            if candidate > now:
-                next_time = candidate
+        # Ищем следующий час вызова
+        next_hour = None
+        for hour in challenge_hours:
+            if hour > current_hour:
+                next_hour = hour
                 break
+            elif hour == current_hour and current_minute == 0:
+                # Если сейчас ровно час вызова, считаем, что вызов уже был, берём следующий
+                continue
 
-        # Если сегодня уже нет, берём первое время завтра
-        if not next_time:
-            tomorrow = today + timedelta(days=1)
-            next_time = datetime.combine(tomorrow, challenge_times[0])
+        if next_hour is None:
+            # Берём первый час следующих суток
+            next_hour = challenge_hours[0] + 24
+
+        # Определяем дату следующего вызова
+        next_date = now.date()
+        if next_hour >= 24:
+            next_hour -= 24
+            next_date += timedelta(days=1)
+
+        next_time = TIMEZONE.localize(datetime.combine(next_date, time(next_hour, 0)))
 
         delta = next_time - now
         hours, remainder = divmod(delta.seconds, 3600)
@@ -557,16 +567,19 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # Генерируем список времен вызовов по местному времени (Екатеринбург)
+    # Генерируем список часов вызовов (целые числа) для команды next_challenge
+    challenge_hours = list(range(0, 24, CHALLENGE_INTERVAL_HOURS))
+    app.bot_data['challenge_hours'] = challenge_hours
+
+    # Генерируем список времен для планировщика (с таймзоной)
     challenge_times_local = []
-    for hour in range(0, 24, CHALLENGE_INTERVAL_HOURS):
-        # Создаем объект time с часовым поясом Екатеринбурга
+    for hour in challenge_hours:
         t = time(hour=hour, minute=0, second=0, tzinfo=TIMEZONE)
         challenge_times_local.append(t)
-        
-    CHALLENGE_TIMES = challenge_times_local 
-    # Сохраняем в bot_data для использования в команде next_challenge
+
     app.bot_data['challenge_times'] = challenge_times_local
+    global CHALLENGE_TIMES
+    CHALLENGE_TIMES = challenge_times_local
 
     # Настройка планировщика заданий
     job_queue = app.job_queue
@@ -585,6 +598,6 @@ def main() -> None:
 
     logger.info("Бот запущен...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    
 if __name__ == "__main__":
     main()
