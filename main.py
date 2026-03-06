@@ -44,7 +44,7 @@ HER_USER_ID = 1419656085        # ID вашей девушки
 ALLOWED_IDS = {MY_USER_ID, HER_USER_ID}  # Множество разрешённых ID
 
 # Интервал вызовов (в часах)
-CHALLENGE_INTERVAL_HOURS = 2  # Можете изменить на любое целое число
+CHALLENGE_INTERVAL_HOURS = 3  # Можете изменить на любое целое число
 
 # Часовой пояс Екатеринбурга (UTC+5)
 TIMEZONE = pytz.timezone('Asia/Yekaterinburg')
@@ -415,7 +415,7 @@ async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     message = await context.bot.send_message(
         chat_id=chat_id,
-        text=f"⚡️ ВЫЗОВ ⚡️\n\n{task_text}\n\nЭто вызов, поэтому награда x2!",
+        text=f"⚡️ ВЫЗОВ ⚡️\n\n{task_text}\n\nЭто вызов, поэтому награда x3!",
         reply_markup=keyboard
     )
 
@@ -602,7 +602,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         # Выполнение вызова
-        doubled_price = price * 2
+        doubled_price = price * 3
 
         # Русское название типа
         type_name = {'love': 'любви', 'lust': 'похоти'}.get(challenge_type, challenge_type)
@@ -620,14 +620,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Подтверждение девушке
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x2: +{doubled_price} к очкам {type_name}!",
+            text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x3: +{doubled_price} к очкам {type_name}!",
             reply_markup=main_menu_keyboard
         )
 
         # Уведомление вам
         await context.bot.send_message(
             chat_id=MY_USER_ID,
-            text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к очкам {type_name} (x2 от {price})."
+            text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к очкам {type_name} (x3 от {price})."
         )
 
 # ========== Запуск бота ==========
