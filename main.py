@@ -429,7 +429,60 @@ async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id=MY_USER_ID,
         text=f"⚡️ Новый вызов для неё:\n\n{task_text} (тип: {task_type}, базовые очки: {price})"
     )
+    
+# Новая команда: добавление очков (только для автора) с возможной причиной
+async def add_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Добавляет очки девушке (только для автора). Использование: /addscore love 10 [причина]"""
+    if update.effective_user.id != MY_USER_ID:
+        await update.message.reply_text("Эта команда только для создателя.")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /addscore love <число> [причина]")
+        return
+    score_type = context.args[0].lower()
+    if score_type not in ('love', 'lust'):
+        await update.message.reply_text("Тип должен быть love или lust.")
+        return
+    try:
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Количество должно быть целым числом.")
+        return
+    if amount <= 0:
+        await update.message.reply_text("Количество должно быть положительным.")
+        return
 
+    # Загружаем статистику для девушки
+    stats = load_stats()
+    her_chat_id = str(HER_USER_ID)
+    if her_chat_id not in stats:
+        stats[her_chat_id] = {"love": 0, "lust": 0}
+    stats[her_chat_id][score_type] += amount
+    save_stats(stats)
+
+    # Русское название
+    type_name = {'love': 'любви', 'lust': 'похоти'}.get(score_type, score_type)
+
+    # Причина (если указана)
+    reason = None
+    if len(context.args) > 2:
+        reason = ' '.join(context.args[2:])
+
+    # Сообщение девушке
+    if reason:
+        await context.bot.send_message(
+            chat_id=HER_USER_ID,
+            text=f"Ты дополнительно получила +{amount} очков {type_name} по следующей причине: {reason}"
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=HER_USER_ID,
+            text=f"Ты дополнительно получила +{amount} очков {type_name}!"
+        )
+
+    # Подтверждение автору
+    await update.message.reply_text(f"✅ Добавлено +{amount} к очкам {type_name} для девушки.")
+    
 # ========== Обработчик инлайн-кнопок ==========
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает нажатия на инлайн-кнопки (только для разрешённых)."""
@@ -612,6 +665,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("next_challenge", next_challenge))
     app.add_handler(CommandHandler("force_challenge", force_challenge))
+    app.add_handler(CommandHandler("addscore", add_score))
     app.add_handler(MessageHandler(filters.ALL, handle_all_messages))
     app.add_handler(CallbackQueryHandler(button_callback))
 
