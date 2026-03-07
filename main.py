@@ -100,44 +100,51 @@ def load_rewards(filename: str) -> List[Tuple[str, int]]:
     return load_tasks(filename)
 
 def load_stats() -> Dict[str, Dict[str, int]]:
-    """Загружает статистику. Принудительно исправляет формат при чтении."""
     if not os.path.exists(STATS_FILE) or os.path.getsize(STATS_FILE) == 0:
         return {}
 
     with open(STATS_FILE, "r", encoding="utf-8") as f:
         content = f.read().strip()
 
-    stats = {}
     try:
-        # Если не JSON, пробуем Base64
-        if not content.startswith('{'):
-            decoded_bytes = base64.b64decode(content)
-            content = decoded_bytes.decode('utf-8')
+        # Если это Base64, декодируем
+        if content and not content.startswith('{'):
+            content = base64.b64decode(content).decode('utf-8')
         
-        # Парсим JSON
         stats = json.loads(content)
+        
+        # Если это не словарь, возвращаем пустой
+        if not isinstance(stats, dict):
+            return {}
+            
+        return stats
     except Exception as e:
-        logger.error(f"Не удалось прочитать файл! Ошибка: {e}")
-        # НЕ возвращаем {}, чтобы не стереть данные, если они там есть
-        return {} 
-
-    # Проверка структуры
-    if not isinstance(stats, dict):
+        logger.error(f"Ошибка чтения: {e}")
+        # ВАЖНО: Если файл битый, не возвращай {}, чтобы не затереть данные!
+        # Но как тогда быть? Если файл битый, единственный способ - 
+        # прочитать его из бэкапа или признать, что данные потеряны.
         return {}
 
-    for chat_id in stats:
-        if not isinstance(stats[chat_id], dict):
-            stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
-        if 'spent' not in stats[chat_id]:
-            stats[chat_id]['spent'] = 0
-            
-    return stats
 
-
-def save_stats(stats: Dict[str, Dict[str, int]]) -> None:
-    """Сохраняет статистику в JSON-файл."""
+def save_stats(new_stats: Dict[str, Dict[str, int]]) -> None:
+    # 1. Читаем то, что УЖЕ есть на диске
+    existing_data = {}
+    if os.path.exists(STATS_FILE) and os.path.getsize(STATS_FILE) > 0:
+        try:
+            with open(STATS_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content.startswith('{'):
+                    content = base64.b64decode(content).decode('utf-8')
+                existing_data = json.loads(content)
+        except:
+            pass # Если файл на диске поврежден, мы его игнорируем
+    
+    # 2. Обновляем существующие данные новыми
+    existing_data.update(new_stats)
+    
+    # 3. Пишем всё вместе
     with open(STATS_FILE, "w", encoding="utf-8") as f:
-        json.dump(stats, f, indent=2, ensure_ascii=False)
+        json.dump(existing_data, f, indent=2, ensure_ascii=False)
 
 # ========== Глобальные списки ==========
 compliments = load_lines(COMPLIMENTS_FILE)
