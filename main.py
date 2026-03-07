@@ -37,6 +37,7 @@ STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 COMPLIMENTS_FILE = "compliments.txt"
 LOVE_TASKS_FILE = "love_tasks.txt"
 LUST_TASKS_FILE = "lust_tasks.txt"
+REWARDS_FILE = "rewards.txt"
 
 # ID пользователей
 MY_USER_ID = 812357068          # Ваш ID
@@ -50,7 +51,13 @@ CHALLENGE_INTERVAL_HOURS = 3  # Можете изменить на любое ц
 TIMEZONE = pytz.timezone('Asia/Yekaterinburg')
 
 # Список команд меню (чтобы не пересылать их как обычные сообщения)
-MENU_COMMANDS = {"📊 Статистика", "🥺 Хочу комплимент", "❤️ Хочу побыть любимой", "❤️‍🔥 Хочу побыть шлюхой"}
+MENU_COMMANDS = {
+    "📊 Статистика",
+    "🥺 Хочу комплимент",
+    "❤️ Хочу побыть любимой",
+    "❤️‍🔥 Хочу побыть шлюхой",
+    "🛍 Магазин"
+}
 
 # ========== Загрузка данных из файлов ==========
 def load_lines(filename: str) -> list:
@@ -87,11 +94,20 @@ def load_tasks(filename: str) -> List[Tuple[str, int]]:
         tasks.append((text, price))
     return tasks
 
+def load_rewards(filename: str) -> List[Tuple[str, int]]:
+    """Загружает награды из файла (аналогично load_tasks)."""
+    return load_tasks(filename)
+
 def load_stats() -> Dict[str, Dict[str, int]]:
-    """Загружает статистику из JSON-файла."""
+    """Загружает статистику из JSON-файла, добавляя поле spent при необходимости."""
     if os.path.exists(STATS_FILE):
         with open(STATS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            stats = json.load(f)
+        # Для каждого пользователя убедимся, что есть поле spent
+        for chat_id in stats:
+            if 'spent' not in stats[chat_id]:
+                stats[chat_id]['spent'] = 0
+        return stats
     return {}
 
 def save_stats(stats: Dict[str, Dict[str, int]]) -> None:
@@ -103,6 +119,7 @@ def save_stats(stats: Dict[str, Dict[str, int]]) -> None:
 compliments = load_lines(COMPLIMENTS_FILE)
 love_tasks = load_tasks(LOVE_TASKS_FILE)
 lust_tasks = load_tasks(LUST_TASKS_FILE)
+rewards = load_rewards(REWARDS_FILE)  # список кортежей (название, цена)
 
 # Проверка, что списки не пусты
 if not compliments:
@@ -111,6 +128,8 @@ if not love_tasks:
     love_tasks = [("Скажи, что любишь меня.", 1)]
 if not lust_tasks:
     lust_tasks = [("Пофлиртуй с кем-то и отправь пруфы.", 1)]
+if not rewards:
+    rewards = [("Нет доступных наград", 1)]
 
 # ========== Клавиатура главного меню ==========
 main_menu_keyboard = ReplyKeyboardMarkup(
@@ -119,6 +138,7 @@ main_menu_keyboard = ReplyKeyboardMarkup(
         ["🥺 Хочу комплимент"],
         ["❤️ Хочу побыть любимой"],
         ["❤️‍🔥 Хочу побыть шлюхой"],
+        ["🛍 Магазин"],
     ],
     resize_keyboard=True,
 )
@@ -318,6 +338,104 @@ async def force_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await send_challenge(context)
     await update.message.reply_text("✅ Вызов принудительно отправлен!")
 
+# Новая команда: добавление очков (только для автора) с возможной причиной
+async def add_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Добавляет очки девушке (только для автора). Использование: /addscore love 10 [причина]"""
+    if update.effective_user.id != MY_USER_ID:
+        await update.message.reply_text("Эта команда только для создателя.")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /addscore love <число> [причина]")
+        return
+    score_type = context.args[0].lower()
+    if score_type not in ('love', 'lust'):
+        await update.message.reply_text("Тип должен быть love или lust.")
+        return
+    try:
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Количество должно быть целым числом.")
+        return
+    if amount <= 0:
+        await update.message.reply_text("Количество должно быть положительным.")
+        return
+
+    # Загружаем статистику для девушки
+    stats = load_stats()
+    her_chat_id = str(HER_USER_ID)
+    if her_chat_id not in stats:
+        stats[her_chat_id] = {"love": 0, "lust": 0, "spent": 0}
+    stats[her_chat_id][score_type] += amount
+    save_stats(stats)
+
+    # Русское название
+    type_name = {'love': 'любви', 'lust': 'похоти'}.get(score_type, score_type)
+
+    # Причина (если указана)
+    reason = None
+    if len(context.args) > 2:
+        reason = ' '.join(context.args[2:])
+
+    # Сообщение девушке
+    if reason:
+        await context.bot.send_message(
+            chat_id=HER_USER_ID,
+            text=f"Ты дополнительно получила +{amount} очков {type_name} по следующей причине: {reason}"
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=HER_USER_ID,
+            text=f"Ты дополнительно получила +{amount} очков {type_name}!"
+        )
+
+    # Подтверждение автору
+    await update.message.reply_text(f"✅ Добавлено +{amount} к очкам {type_name} для девушки.")
+
+# ========== Функция отображения магазина с пагинацией ==========
+async def show_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+    """Отправляет сообщение со списком наград и кнопками пагинации/покупки."""
+    items_per_page = 5
+    total_pages = (len(rewards) + items_per_page - 1) // items_per_page
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * items_per_page
+    end = start + items_per_page
+    current_items = rewards[start:end]
+
+    # Формируем текст
+    text = f"🛍 Магазин (страница {page+1}/{total_pages}):\n\n"
+    for idx, (name, cost) in enumerate(current_items, start=start+1):
+        text += f"{idx}. {name} — {cost} баллов\n"
+
+    # Создаём инлайн-кнопки
+    keyboard = []
+    # Кнопки для каждой награды
+    for i, (name, cost) in enumerate(current_items):
+        actual_index = start + i  # глобальный индекс
+        keyboard.append([InlineKeyboardButton(
+            f"✅ {name} ({cost})",
+            callback_data=f"buy_{actual_index}_{cost}"
+        )])
+
+    # Кнопки пагинации
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"shop_page_{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("➡️ Вперёд", callback_data=f"shop_page_{page+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    # Кнопка закрытия (необязательно)
+    keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="shop_close")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
+
 # ========== Универсальный обработчик сообщений ==========
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает все входящие сообщения: сначала пересылает (если от девушки), затем обрабатывает кнопки меню (только для разрешённых)."""
@@ -336,18 +454,25 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if text == "📊 Статистика":
             stats = load_stats()
-            user_stats = stats.get(chat_id, {"love": 0, "lust": 0})
+            user_stats = stats.get(chat_id, {"love": 0, "lust": 0, "spent": 0})
+            total_earned = user_stats['love'] + user_stats['lust']
+            # Новый расчёт баланса: min(любовь, похоть) - потрачено
+            current_balance = min(user_stats['love'], user_stats['lust']) - user_stats.get('spent', 0)
             await update.message.reply_text(
-                f"📊 Твоя статистика\n"
-                f"Любовь — {user_stats['love']}\n"
-                f"Похоть — {user_stats['lust']}",
+                f"📊 Твоя статистика:\n"
+                f"Всего заработано: {total_earned}\n"
+                f"Текущий баланс: {current_balance}\n\n"
+                f"(Любовь: {user_stats['love']}, Похоть: {user_stats['lust']})",
                 reply_markup=main_menu_keyboard,
             )
             # Если это сделала девушка — уведомить меня
             if user_id == HER_USER_ID:
                 await context.bot.send_message(
                     chat_id=MY_USER_ID,
-                    text=f"📊 Она запросила статистику:\nЛюбовь: {user_stats['love']}\nПохоть: {user_stats['lust']}"
+                    text=f"📊 Она запросила статистику:\n"
+                         f"Всего заработано: {total_earned}\n"
+                         f"Текущий баланс: {current_balance}\n"
+                         f"Любовь: {user_stats['love']}, Похоть: {user_stats['lust']}"
                 )
 
         elif text == "🥺 Хочу комплимент":
@@ -379,6 +504,9 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ]
             ])
             await update.message.reply_text(task_text, reply_markup=keyboard)
+
+        elif text == "🛍 Магазин":
+            await show_shop(update, context, page=0)
 
 # ========== Функция отправки вызова по расписанию ==========
 async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -415,7 +543,7 @@ async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     message = await context.bot.send_message(
         chat_id=chat_id,
-        text=f"⚡️ ВЫЗОВ ⚡️\n\n{task_text}\n\nЭто вызов, поэтому награда x3!",
+        text=f"⚡️ ВЫЗОВ ⚡️\n\n{task_text}\n\nЭто вызов с ограниченным временем, награда x3!\n\nЕсли ты его выполнишь, получишь +{price*3} к {task_type}!\nЕсли справишься лучше чем нужно, я докину баллов за старания!\n\nНе забывай, что у тебя всего 3 часа, чтобы выполнить его, хорошо?",
         reply_markup=keyboard
     )
 
@@ -429,60 +557,7 @@ async def send_challenge(context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id=MY_USER_ID,
         text=f"⚡️ Новый вызов для неё:\n\n{task_text} (тип: {task_type}, базовые очки: {price})"
     )
-    
-# Новая команда: добавление очков (только для автора) с возможной причиной
-async def add_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Добавляет очки девушке (только для автора). Использование: /addscore love 10 [причина]"""
-    if update.effective_user.id != MY_USER_ID:
-        await update.message.reply_text("Эта команда только для создателя.")
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Использование: /addscore love <число> [причина]")
-        return
-    score_type = context.args[0].lower()
-    if score_type not in ('love', 'lust'):
-        await update.message.reply_text("Тип должен быть love или lust.")
-        return
-    try:
-        amount = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("Количество должно быть целым числом.")
-        return
-    if amount <= 0:
-        await update.message.reply_text("Количество должно быть положительным.")
-        return
 
-    # Загружаем статистику для девушки
-    stats = load_stats()
-    her_chat_id = str(HER_USER_ID)
-    if her_chat_id not in stats:
-        stats[her_chat_id] = {"love": 0, "lust": 0}
-    stats[her_chat_id][score_type] += amount
-    save_stats(stats)
-
-    # Русское название
-    type_name = {'love': 'любви', 'lust': 'похоти'}.get(score_type, score_type)
-
-    # Причина (если указана)
-    reason = None
-    if len(context.args) > 2:
-        reason = ' '.join(context.args[2:])
-
-    # Сообщение девушке
-    if reason:
-        await context.bot.send_message(
-            chat_id=HER_USER_ID,
-            text=f"Ты дополнительно получила +{amount} очков {type_name} по следующей причине: {reason}"
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=HER_USER_ID,
-            text=f"Ты дополнительно получила +{amount} очков {type_name}!"
-        )
-
-    # Подтверждение автору
-    await update.message.reply_text(f"✅ Добавлено +{amount} к очкам {type_name} для девушки.")
-    
 # ========== Обработчик инлайн-кнопок ==========
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает нажатия на инлайн-кнопки (только для разрешённых)."""
@@ -499,7 +574,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
     chat_id = str(update.effective_chat.id)
     message = query.message
-    task_text = message.text  # текст задания (для обычных кнопок)
 
     # --- Обычные задания (любовь/похоть) ---
     if data.startswith("love_done_"):
@@ -511,21 +585,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         stats = load_stats()
         if chat_id not in stats:
-            stats[chat_id] = {"love": 0, "lust": 0}
+            stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
         stats[chat_id]["love"] += price
         save_stats(stats)
 
         await message.delete()
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎉 Молодец! Ты получила {price} к любви, сделав это:\n\n{task_text}",
+            text=f"🎉 Молодец! Ты получила {price} к любви, сделав это:\n\n{message.text}",
             reply_markup=main_menu_keyboard,
         )
 
         if user_id == HER_USER_ID:
             await context.bot.send_message(
                 chat_id=MY_USER_ID,
-                text=f"✅ Она выполнила задание «{task_text}» и получила +{price} к любви."
+                text=f"✅ Она выполнила задание «{message.text}» и получила +{price} к любви."
             )
         return
 
@@ -537,21 +611,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         stats = load_stats()
         if chat_id not in stats:
-            stats[chat_id] = {"love": 0, "lust": 0}
+            stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
         stats[chat_id]["lust"] += price
         save_stats(stats)
 
         await message.delete()
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎉 Молодец! Ты получила {price} к похоти, сделав это:\n\n{task_text}",
+            text=f"🎉 Молодец! Ты получила {price} к похоти, сделав это:\n\n{message.text}",
             reply_markup=main_menu_keyboard,
         )
 
         if user_id == HER_USER_ID:
             await context.bot.send_message(
                 chat_id=MY_USER_ID,
-                text=f"🔥 Она выполнила задание «{task_text}» и получила +{price} к похоти."
+                text=f"🔥 Она выполнила задание «{message.text}» и получила +{price} к похоти."
             )
         return
 
@@ -561,7 +635,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             task_type = "любви" if data == "love_cancel" else "похоти"
             await context.bot.send_message(
                 chat_id=MY_USER_ID,
-                text=f"❌ Она отказалась делать задание «{task_text}» (тип: {task_type})."
+                text=f"❌ Она отказалась делать задание «{message.text}» (тип: {task_type})."
             )
         return
 
@@ -602,15 +676,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         # Выполнение вызова
-        doubled_price = price * 3
+        tripled_price = price * 3
 
         # Русское название типа
         type_name = {'love': 'любви', 'lust': 'похоти'}.get(challenge_type, challenge_type)
 
         stats = load_stats()
         if chat_id not in stats:
-            stats[chat_id] = {"love": 0, "lust": 0}
-        stats[chat_id][challenge_type] += doubled_price
+            stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
+        stats[chat_id][challenge_type] += tripled_price
         save_stats(stats)
 
         await message.delete()
@@ -620,15 +694,94 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Подтверждение девушке
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎉 Молодец! Ты выполнила ВЫЗОВ и получила x3: +{doubled_price} к очкам {type_name}!",
+            text=f"⚡️ВЫЗОВ ВСЁ⚡️ Ты выполнила вызов и получила x3 баллов: +{tripled_price} к {type_name}!",
             reply_markup=main_menu_keyboard
         )
 
         # Уведомление вам
         await context.bot.send_message(
             chat_id=MY_USER_ID,
-            text=f"⚡️ Она выполнила ВЫЗОВ: «{challenge_task_text}» и получила +{doubled_price} к очкам {type_name} (x3 от {price})."
+            text=f"⚡️ Она выполнила вызов: «{challenge_task_text}» и получила +{tripled_price} к очкам {type_name} (x3 от {price})."
         )
+        return
+
+    # --- Магазин ---
+    if data.startswith("buy_"):
+        # Формат: buy_<index>_<price>
+        parts = data.split('_')
+        if len(parts) != 3:
+            await query.answer("Ошибка: неверный формат.", show_alert=True)
+            return
+        try:
+            idx = int(parts[1])
+            cost = int(parts[2])
+        except ValueError:
+            await query.answer("Ошибка: неверные данные.", show_alert=True)
+            return
+
+        if idx < 0 or idx >= len(rewards):
+            await query.answer("Награда не найдена.", show_alert=True)
+            return
+
+        reward_name, reward_cost = rewards[idx]
+        if reward_cost != cost:
+            await query.answer("Цена изменилась, попробуйте снова.", show_alert=True)
+            return
+
+        # Загружаем статистику
+        stats = load_stats()
+        if chat_id not in stats:
+            stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
+        user_stats = stats[chat_id]
+
+        # Вычисляем баланс по новому правилу
+        current_balance = min(user_stats['love'], user_stats['lust']) - user_stats.get('spent', 0)
+
+        if current_balance < cost:
+            # Недостаточно баллов
+            await query.answer("❌ Недостаточно баллов! Подкопи их, выполняя задания, хорошо?", show_alert=True)
+            if user_id == HER_USER_ID:
+                await context.bot.send_message(
+                    chat_id=MY_USER_ID,
+                    text=f"❌ Она пыталась купить «{reward_name}» за {cost} баллов, но у неё недостаточно (баланс {current_balance})."
+                )
+            return
+
+        # Достаточно баллов — списываем
+        stats[chat_id]['spent'] = stats[chat_id].get('spent', 0) + cost
+        save_stats(stats)
+
+        # Сообщение девушке
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🎉 Ты купила награду: «{reward_name}» за {cost} баллов!",
+            reply_markup=main_menu_keyboard
+        )
+
+        # Уведомление вам
+        # После покупки обновляем баланс для сообщения вам
+        new_balance = min(user_stats['love'], user_stats['lust']) - stats[chat_id]['spent']
+        await context.bot.send_message(
+            chat_id=MY_USER_ID,
+            text=f"✅ Она купила награду: «{reward_name}» за {cost} баллов. Текущий баланс: {new_balance}"
+        )
+
+        # Закрываем сообщение магазина (удаляем или обновляем)
+        await message.delete()
+        return
+
+    if data.startswith("shop_page_"):
+        try:
+            page = int(data.split("_")[2])
+        except (IndexError, ValueError):
+            await query.answer("Ошибка страницы.", show_alert=True)
+            return
+        await show_shop(update, context, page)
+        return
+
+    if data == "shop_close":
+        await message.delete()
+        return
 
 # ========== Запуск бота ==========
 def main() -> None:
