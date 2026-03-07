@@ -100,50 +100,44 @@ def load_rewards(filename: str) -> List[Tuple[str, int]]:
 
 def load_stats() -> Dict[str, Dict[str, int]]:
     """
-    Загружает статистику из файла. 
-    Автоматически определяет формат: обычный JSON или Base64-кодированный JSON.
-    Также гарантирует наличие поля 'spent' для каждого пользователя.
+    Загружает статистику, принудительно исправляя Base64 на JSON при чтении.
     """
-    # Если файла нет или он пуст, возвращаем пустой словарь
     if not os.path.exists(STATS_FILE) or os.path.getsize(STATS_FILE) == 0:
         return {}
 
-    try:
-        with open(STATS_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
+    with open(STATS_FILE, "r", encoding="utf-8") as f:
+        content = f.read().strip()
 
-        # Если контент начинается не с '{', пробуем декодировать из Base64
-        if content and not content.startswith('{'):
-            try:
-                decoded_bytes = base64.b64decode(content)
-                content = decoded_bytes.decode('utf-8')
-            except Exception as e:
-                logger.error(f"Не удалось декодировать Base64 в stats.json: {e}")
-                return {}
-
-        # Превращаем строку в объект Python
-        stats = json.loads(content)
-
-        # Проверка: если в файле не словарь, возвращаем пустой
-        if not isinstance(stats, dict):
-            logger.error("Структура stats.json повреждена (ожидался словарь).")
+    # Если это Base64 (нет фигурных скобок), декодируем
+    if content and not content.startswith('{'):
+        try:
+            decoded_json = base64.b64decode(content).decode('utf-8')
+            stats = json.loads(decoded_json)
+            
+            # Агрессивно перезаписываем файл нормальным JSON сразу, 
+            # чтобы хостинг больше не "пугался" этого файла
+            with open(STATS_FILE, "w", encoding="utf-8") as f_out:
+                json.dump(stats, f_out, indent=2, ensure_ascii=False)
+            logger.info("Файл был в Base64, успешно сконвертирован в чистый JSON.")
+        except Exception as e:
+            logger.error(f"Ошибка при конвертации Base64: {e}")
+            return {}
+    else:
+        # Если это нормальный JSON, просто парсим
+        try:
+            stats = json.loads(content)
+        except json.JSONDecodeError:
             return {}
 
-        # Убеждаемся, что для каждого пользователя есть поле 'spent'
-        for chat_id in stats:
-            if not isinstance(stats[chat_id], dict):
-                stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
-            if 'spent' not in stats[chat_id]:
-                stats[chat_id]['spent'] = 0
-        
-        return stats
+    # Убеждаемся, что есть поле 'spent'
+    for chat_id in stats:
+        if not isinstance(stats[chat_id], dict):
+            stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
+        if 'spent' not in stats[chat_id]:
+            stats[chat_id]['spent'] = 0
+            
+    return stats
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Ошибка парсинга JSON в stats.json: {e}")
-        return {}
-    except Exception as e:
-        logger.error(f"Непредвиденная ошибка при чтении stats.json: {e}")
-        return {}
 
 def save_stats(stats: Dict[str, Dict[str, int]]) -> None:
     """Сохраняет статистику в JSON-файл."""
