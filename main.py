@@ -100,37 +100,31 @@ def load_rewards(filename: str) -> List[Tuple[str, int]]:
     return load_tasks(filename)
 
 def load_stats() -> Dict[str, Dict[str, int]]:
-    """
-    Загружает статистику, принудительно исправляя Base64 на JSON при чтении.
-    """
+    """Загружает статистику. Принудительно исправляет формат при чтении."""
     if not os.path.exists(STATS_FILE) or os.path.getsize(STATS_FILE) == 0:
         return {}
 
     with open(STATS_FILE, "r", encoding="utf-8") as f:
         content = f.read().strip()
 
-    # Если это Base64 (нет фигурных скобок), декодируем
-    if content and not content.startswith('{'):
-        try:
-            decoded_json = base64.b64decode(content).decode('utf-8')
-            stats = json.loads(decoded_json)
-            
-            # Агрессивно перезаписываем файл нормальным JSON сразу, 
-            # чтобы хостинг больше не "пугался" этого файла
-            with open(STATS_FILE, "w", encoding="utf-8") as f_out:
-                json.dump(stats, f_out, indent=2, ensure_ascii=False)
-            logger.info("Файл был в Base64, успешно сконвертирован в чистый JSON.")
-        except Exception as e:
-            logger.error(f"Ошибка при конвертации Base64: {e}")
-            return {}
-    else:
-        # Если это нормальный JSON, просто парсим
-        try:
-            stats = json.loads(content)
-        except json.JSONDecodeError:
-            return {}
+    stats = {}
+    try:
+        # Если не JSON, пробуем Base64
+        if not content.startswith('{'):
+            decoded_bytes = base64.b64decode(content)
+            content = decoded_bytes.decode('utf-8')
+        
+        # Парсим JSON
+        stats = json.loads(content)
+    except Exception as e:
+        logger.error(f"Не удалось прочитать файл! Ошибка: {e}")
+        # НЕ возвращаем {}, чтобы не стереть данные, если они там есть
+        return {} 
 
-    # Убеждаемся, что есть поле 'spent'
+    # Проверка структуры
+    if not isinstance(stats, dict):
+        return {}
+
     for chat_id in stats:
         if not isinstance(stats[chat_id], dict):
             stats[chat_id] = {"love": 0, "lust": 0, "spent": 0}
