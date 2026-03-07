@@ -486,12 +486,10 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         if text == "📊 Статистика":
             stats = load_stats()
             user_stats = stats.get(chat_id, {"love": 0, "lust": 0, "spent": 0})
-            total_earned = user_stats['love'] + user_stats['lust']
             # Новый расчёт баланса: min(любовь, похоть) - потрачено
             current_balance = min(user_stats['love'], user_stats['lust']) - user_stats.get('spent', 0)
             await update.message.reply_text(
                 f"📊 Твоя статистика:\n"
-                f"Всего заработано: {total_earned}\n"
                 f"Текущий баланс: {current_balance}\n\n"
                 f"(Любовь: {user_stats['love']}, Похоть: {user_stats['lust']})",
                 reply_markup=main_menu_keyboard,
@@ -501,7 +499,6 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await context.bot.send_message(
                     chat_id=MY_USER_ID,
                     text=f"📊 Она запросила статистику:\n"
-                         f"Всего заработано: {total_earned}\n"
                          f"Текущий баланс: {current_balance}\n"
                          f"Любовь: {user_stats['love']}, Похоть: {user_stats['lust']}"
                 )
